@@ -1,4 +1,5 @@
 import requests
+import time
 from datetime import datetime, timedelta
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -59,12 +60,13 @@ def fetch_train_data(model: str, api_date: str) -> dict:
             raise
 
 def get_seat_availability(train_model: str, journey_date: str, from_city: str, to_city: str, auth_token: str, device_key: str) -> tuple:
+    time.sleep(2)
     url = "https://railspaapi.shohoz.com/v1.0/web/bookings/search-trips-v2"
     params = {
         "from_city": from_city,
         "to_city": to_city,
         "date_of_journey": journey_date,
-        "seat_class": "SHULOV"
+        "seat_class": "S_CHAIR"
     }
     headers = {
         "Authorization": f"Bearer {auth_token}",
@@ -280,7 +282,7 @@ def compute_matrix(train_model: str, journey_date_str: str, api_date_format: str
 
     seat_type_has_data = {seat_type: False for seat_type in SEAT_TYPES}
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         futures = [
             executor.submit(
                 get_seat_availability,

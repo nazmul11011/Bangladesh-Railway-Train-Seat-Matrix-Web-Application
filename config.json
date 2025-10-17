@@ -1,9 +1,9 @@
 {
-    "version": "1.1.10",
+    "version": "2.0",
     "is_maintenance": 0,
     "maintenance_message": "This service is no longer available as Bangladesh Railway has restricted API data access by enforcing Cloudflare verification on each request. Thank you for being with us throughout this journey.",
-    "is_banner_enabled": 1,
+    "is_banner_enabled": 0,
     "image_link": "https://raw.githubusercontent.com/nishatrhythm/Bangladesh-Railway-Train-Seat-Matrix-Web-Application/main/static/images/discontinued-notice.png",
-    "force_banner": 1,
+    "force_banner": 0,
     "queue_enabled": false
 }
