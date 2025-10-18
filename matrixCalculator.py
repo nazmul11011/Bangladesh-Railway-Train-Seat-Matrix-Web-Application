@@ -60,7 +60,7 @@ def fetch_train_data(model: str, api_date: str) -> dict:
             raise
 
 def get_seat_availability(train_model: str, journey_date: str, from_city: str, to_city: str, auth_token: str, device_key: str) -> tuple:
-    time.sleep(2)
+    time.sleep(1.4)
     url = "https://railspaapi.shohoz.com/v1.0/web/bookings/search-trips-v2"
     params = {
         "from_city": from_city,
