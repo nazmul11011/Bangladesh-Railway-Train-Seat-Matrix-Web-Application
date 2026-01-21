@@ -60,7 +60,7 @@ def fetch_train_data(model: str, api_date: str) -> dict:
             raise
 
 def get_seat_availability(train_model: str, journey_date: str, from_city: str, to_city: str, auth_token: str, device_key: str) -> tuple:
-    time.sleep(1.4)
+    time.sleep(2)
     url = "https://railspaapi.shohoz.com/v1.0/web/bookings/search-trips-v2"
     params = {
         "from_city": from_city,
@@ -70,7 +70,8 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
     }
     headers = {
         "Authorization": f"Bearer {auth_token}",
-        "x-device-key": device_key
+        "x-device-key": device_key,
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
     }
 
     max_retries = 2
