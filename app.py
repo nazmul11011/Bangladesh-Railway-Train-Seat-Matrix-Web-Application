@@ -739,7 +739,8 @@ def fetch_trains_for_date(origin, destination, date_str, auth_token, device_key)
     }
     headers = {
         "Authorization": f"Bearer {auth_token}",
-        "x-device-key": device_key
+        "x-device-key": device_key,
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
     }
     
     max_retries = 2
