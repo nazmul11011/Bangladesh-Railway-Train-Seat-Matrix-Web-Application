@@ -1,8 +1,13 @@
 import requests
 import time
+import logging
+import uuid
+import random
 from datetime import datetime, timedelta
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger(__name__)
 
 SEAT_TYPES = [
     "S_CHAIR", "SHOVAN", "SNIGDHA", "F_SEAT", "F_CHAIR", "AC_S", "F_BERTH", "AC_B", "SHULOV", "AC_CHAIR"
@@ -14,7 +19,10 @@ def fetch_train_data(model: str, api_date: str) -> dict:
         "model": model,
         "departure_date_time": api_date
     }
-    headers = {'Content-Type': 'application/json'}
+    headers = {
+        'Content-Type': 'application/json',
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+    }
 
     max_retries = 2
     retry_count = 0
@@ -60,7 +68,16 @@ def fetch_train_data(model: str, api_date: str) -> dict:
             raise
 
 def get_seat_availability(train_model: str, journey_date: str, from_city: str, to_city: str, auth_token: str, device_key: str) -> tuple:
-    time.sleep(1.5)
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+
+    call_id = uuid.uuid4().hex[:10]
+    start_ts = time.perf_counter()
+
+    time.sleep(2)
     url = "https://railspaapi.shohoz.com/v1.0/web/bookings/search-trips-v2"
     params = {
         "from_city": from_city,
@@ -79,17 +96,34 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
 
     while retry_count < max_retries:
         try:
+            attempt = retry_count + 1
             response = requests.get(url, headers=headers, params=params)
             
             if response.status_code == 429:
-                try:
-                    error_data = response.json()
-                    error_messages = error_data.get("error", {}).get("messages", [])
-                    if isinstance(error_messages, list) and error_messages:
-                        raise Exception(error_messages[0])
-                    raise Exception("Too many requests. Please slow down.")
-                except ValueError:
-                    raise Exception("Too many requests. Please slow down.")
+                retry_count += 1
+                backoff_s = 2.0 + (retry_count * 1.5) + random.random() * 0.5
+                logger.warning(
+                    "seat_check rate_limited call_id=%s %s->%s retry_in=%.1fs",
+                    call_id,
+                    from_city,
+                    to_city,
+                    backoff_s,
+                )
+                if retry_count >= max_retries:
+                    elapsed_ms = (time.perf_counter() - start_ts) * 1000
+                    logger.info(
+                        "seat_check result call_id=%s %s -> %s online=%s offline=%s total=%s ms=%.1f",
+                        call_id,
+                        from_city,
+                        to_city,
+                        0,
+                        0,
+                        0,
+                        elapsed_ms,
+                    )
+                    return (from_city, to_city, None)
+                time.sleep(backoff_s)
+                continue
             
             if response.status_code == 401:
                 try:
@@ -133,22 +167,63 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
                                 "fare": fare,
                                 "vat_amount": vat_amount
                             }
+                    total_online = sum(v.get("online", 0) for v in seat_info.values())
+                    total_offline = sum(v.get("offline", 0) for v in seat_info.values())
+                    total = total_online + total_offline
+                    elapsed_ms = (time.perf_counter() - start_ts) * 1000
+                    logger.info(
+                        "seat_check result call_id=%s %s -> %s online=%s offline=%s total=%s ms=%.1f",
+                        call_id,
+                        from_city,
+                        to_city,
+                        total_online,
+                        total_offline,
+                        total,
+                        elapsed_ms,
+                    )
                     return (from_city, to_city, seat_info)
 
+            elapsed_ms = (time.perf_counter() - start_ts) * 1000
+            logger.info(
+                "seat_check result call_id=%s %s -> %s online=%s offline=%s total=%s ms=%.1f",
+                call_id,
+                from_city,
+                to_city,
+                0,
+                0,
+                0,
+                elapsed_ms,
+            )
             return (from_city, to_city, None)
 
         except requests.RequestException as e:
             status_code = e.response.status_code if e.response is not None else None
             
             if status_code == 429:
-                try:
-                    error_data = e.response.json()
-                    error_messages = error_data.get("error", {}).get("messages", [])
-                    if isinstance(error_messages, list) and error_messages:
-                        raise Exception(error_messages[0])
-                    raise Exception("Too many requests. Please slow down.")
-                except ValueError:
-                    raise Exception("Too many requests. Please slow down.")
+                retry_count += 1
+                backoff_s = 2.0 + (retry_count * 1.5) + random.random() * 0.5
+                logger.warning(
+                    "seat_check rate_limited call_id=%s %s->%s retry_in=%.1fs",
+                    call_id,
+                    from_city,
+                    to_city,
+                    backoff_s,
+                )
+                if retry_count >= max_retries:
+                    elapsed_ms = (time.perf_counter() - start_ts) * 1000
+                    logger.info(
+                        "seat_check result call_id=%s %s -> %s online=%s offline=%s total=%s ms=%.1f",
+                        call_id,
+                        from_city,
+                        to_city,
+                        0,
+                        0,
+                        0,
+                        elapsed_ms,
+                    )
+                    return (from_city, to_city, None)
+                time.sleep(backoff_s)
+                continue
             
             if status_code == 401:
                 try:
@@ -166,6 +241,18 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
                     
             if hasattr(e, 'response') and e.response and e.response.status_code == 403:
                 raise Exception("Currently we are experiencing high traffic. Please try again after some time.")
+
+            elapsed_ms = (time.perf_counter() - start_ts) * 1000
+            logger.info(
+                "seat_check result call_id=%s %s -> %s online=%s offline=%s total=%s ms=%.1f",
+                call_id,
+                from_city,
+                to_city,
+                0,
+                0,
+                0,
+                elapsed_ms,
+            )
             return (from_city, to_city, None)
 
 def clean_halt_times(routes):
