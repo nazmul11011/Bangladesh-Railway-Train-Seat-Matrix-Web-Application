@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generating Matrix | Train Seat Matrix</title>
+    <link rel="icon" href="https://raw.githubusercontent.com/nishatrhythm/Bangladesh-Railway-Train-and-Fare-List-with-Route-Map/main/images/bangladesh-railway.png" type="image/x-icon" sizes="30x30">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        body { align-items: flex-start; padding: 20px 0; }
+        .job-wrap { width: 95%; max-width: 820px; margin: 0 auto; text-align: center; }
+        .job-wrap h1 { margin-top: 10px; }
+        .job-meta { color: #444; margin: 12px 0 18px; font-size: 14px; line-height: 1.7; }
+        .job-meta i { color: rgb(0, 103, 71); margin-right: 6px; }
+
+        .terminal { background: #0d1117; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,.25); overflow: hidden; text-align: left; position: relative; }
+        .term-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #161b22; color: #8b949e; font-size: 13px; }
+        .term-dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+        .term-dot.r { background: #ff5f56; } .term-dot.y { background: #ffbd2e; } .term-dot.g { background: #27c93f; }
+        .term-title { margin-left: 6px; flex: 1; }
+        .term-state { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+        .term-state .pulse { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; animation: pulse 1.2s infinite; }
+        .term-state.done .pulse { animation: none; }
+        .term-state.fail .pulse { background: #f85149; animation: none; }
+        @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+
+        .term-body { height: 55vh; min-height: 280px; overflow-y: auto; padding: 12px 14px; scroll-behavior: smooth;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12.5px; line-height: 1.6; color: #c9d1d9; }
+        .term-body::-webkit-scrollbar { width: 10px; }
+        .term-body::-webkit-scrollbar-thumb { background: #30363d; border-radius: 6px; }
+        .log-line { white-space: pre-wrap; word-break: break-word; animation: lineIn .25s ease-out; }
+        @keyframes lineIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .log-t { color: #6e7681; margin-right: 8px; }
+        .log-l { margin-right: 8px; font-weight: 700; }
+        .lvl-INFO .log-l { color: #58a6ff; }
+        .lvl-WARNING .log-l, .lvl-WARNING .log-m { color: #d29922; }
+        .lvl-ERROR .log-l, .lvl-ERROR .log-m { color: #f85149; }
+        .log-line.ok .log-m { color: #3fb950; }
+        .cursor::after { content: "▋"; color: #3fb950; animation: blink 1s steps(1) infinite; margin-left: 2px; }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        .jump { position: absolute; right: 18px; bottom: 16px; background: rgb(0,103,71); color: #fff; border: 0; border-radius: 20px; padding: 7px 14px;
+            font-size: 12px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,.4); display: none; font-family: inherit; }
+        .jump.show { display: inline-flex; gap: 6px; align-items: center; }
+
+        .job-actions { margin-top: 16px; display: none; }
+        .job-actions a { display: inline-block; padding: 10px 22px; border-radius: 8px; background: rgb(0,103,71); color: #fff; text-decoration: none; font-weight: 600; }
+        .note { color: #666; font-size: 12.5px; margin-top: 12px; }
+    </style>
+</head>
+<body>
+    <div class="job-wrap">
+        <h1><i class="fas fa-subway"></i> BR Train Seat Matrix</h1>
+        <div class="job-meta">
+            {% if form_values %}
+            <div><i class="fas fa-train"></i>{{ form_values.train_model }} | <i class="fas fa-calendar-alt"></i>{{ form_values.date }}</div>
+            {% endif %}
+        </div>
+
+        <div class="terminal">
+            <div class="term-bar">
+                <span class="term-dot r"></span><span class="term-dot y"></span><span class="term-dot g"></span>
+                <span class="term-title">live logs</span>
+                <span class="term-state" id="state"><span class="pulse"></span><span id="stateText">Running</span></span>
+            </div>
+            <div class="term-body cursor" id="term" aria-live="polite"></div>
+            <button class="jump" id="jump" type="button"><i class="fas fa-arrow-down"></i> Jump to latest</button>
+        </div>
+
+        <div class="job-actions" id="actions"><a id="backLink" href="/"><i class="fas fa-arrow-left"></i> Back to search</a></div>
+        <div class="note" id="note">Please keep this page open. It will open your matrix automatically when finished.</div>
+    </div>
+
+    <script>
+    (function () {
+        const jobId = {{ job_id | tojson }};
+        const term = document.getElementById('term');
+        const jump = document.getElementById('jump');
+        const stateEl = document.getElementById('state');
+        const stateText = document.getElementById('stateText');
+        let next = 0, follow = true, finished = false, misses = 0;
+
+        const atBottom = () => term.scrollHeight - term.scrollTop - term.clientHeight < 40;
+        term.addEventListener('scroll', () => {
+            follow = atBottom();
+            jump.classList.toggle('show', !follow);
+        });
+        jump.addEventListener('click', () => { follow = true; jump.classList.remove('show'); term.scrollTop = term.scrollHeight; });
+
+        function addLine(l) {
+            const d = document.createElement('div');
+            d.className = 'log-line lvl-' + l.lvl + (/^Done!/.test(l.msg) ? ' ok' : '');
+            const t = document.createElement('span'); t.className = 'log-t'; t.textContent = l.t;
+            const lv = document.createElement('span'); lv.className = 'log-l'; lv.textContent = l.lvl;
+            const m = document.createElement('span'); m.className = 'log-m'; m.textContent = l.msg;
+            d.append(t, lv, m);
+            term.appendChild(d);
+        }
+
+        function finish(status, error) {
+            finished = true;
+            term.classList.remove('cursor');
+            const note = document.getElementById('note');
+            if (status === 'completed') {
+                stateEl.classList.add('done'); stateText.textContent = 'Completed';
+                note.textContent = 'Opening your matrix...';
+                setTimeout(() => location.href = '/job/' + jobId + '/result', 800);
+            } else {
+                stateEl.classList.add('fail'); stateText.textContent = 'Failed';
+                const back = document.getElementById('backLink');
+                back.href = '/job/' + jobId + '/failed';
+                document.getElementById('actions').style.display = 'block';
+                note.textContent = '';
+                if (error && error.indexOf('AUTH_') === 0) {
+                    note.textContent = 'Your credentials expired. Redirecting...';
+                    setTimeout(() => location.href = back.href, 1800);
+                }
+            }
+        }
+
+        async function poll() {
+            if (finished) return;
+            try {
+                const r = await fetch('/job/' + jobId + '/logs?since=' + next, { cache: 'no-store' });
+                if (r.status === 404) {
+                    finished = true; term.classList.remove('cursor');
+                    stateEl.classList.add('fail'); stateText.textContent = 'Lost';
+                    addLine({ t: '--:--:--', lvl: 'ERROR', msg: 'This job no longer exists (the server may have restarted). Please start a new search.' });
+                    document.getElementById('actions').style.display = 'block';
+                    return;
+                }
+                const data = await r.json();
+                misses = 0;
+                data.logs.forEach(addLine);
+                next = data.next;
+                if (data.logs.length && follow) term.scrollTop = term.scrollHeight;
+                if (data.status !== 'running') {
+                    // one more pass is unnecessary: logs were returned in the same snapshot as status? re-check cheaply
+                    const r2 = await fetch('/job/' + jobId + '/logs?since=' + next, { cache: 'no-store' });
+                    const d2 = await r2.json();
+                    d2.logs.forEach(addLine); next = d2.next;
+                    if (follow) term.scrollTop = term.scrollHeight;
+                    finish(d2.status, d2.error);
+                    return;
+                }
+            } catch (e) {
+                misses++;
+            }
+            setTimeout(poll, misses ? Math.min(5000, 1000 * misses) : 1000);
+        }
+        poll();
+    })();
+    </script>
+</body>
+</html>

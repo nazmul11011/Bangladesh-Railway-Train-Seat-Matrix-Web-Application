@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import json, pytz, os, re, uuid, base64, requests, logging, sys
 from matrixCalculator import compute_matrix
 from request_queue import RequestQueue
+from jobs import job_store
 
 app = Flask(__name__)
 app.secret_key = "super_secret_key"
@@ -195,7 +196,7 @@ def block_android_from_route():
 @app.before_request
 def android_route_blocker():
     
-    allowed_paths = ['/android', '/ads.txt', '/queue_status', '/cancel_request', 
+    allowed_paths = ['/android', '/ads.txt', '/queue_status', '/job', '/cancel_request', 
                      '/cancel_request_beacon', '/queue_heartbeat', '/queue_cleanup', '/queue_stats',
                      '/test-android-detection', '/clear-android-session', '/admin']
     
@@ -485,28 +486,31 @@ def matrix():
             session['queue_request_id'] = request_id
             return redirect(url_for('queue_wait'))
         else:
-            auth_token = request.form.get('auth_token', '')
-            device_key = request.form.get('device_key', '')
-            result = process_matrix_request(train_model, journey_date_str, api_date_format, form_values, auth_token, device_key)
-            
-            if "error" in result:
-                session['error'] = result["error"]
-                return redirect(url_for('home'))
-            
-            result_id = str(uuid.uuid4())
-            RESULT_CACHE[result_id] = result["result"]
-            session['result_id'] = result_id
-            return redirect(url_for('matrix_result'))
+            # Run in the background and return a live-log page right away, so the
+            # HTTP request never outlives the host's gateway timeout.
+            job = job_store.start(
+                process_matrix_request,
+                {
+                    'train_model': train_model,
+                    'journey_date_str': journey_date_str,
+                    'api_date_format': api_date_format,
+                    'form_values': form_values,
+                    'auth_token': request.form.get('auth_token', ''),
+                    'device_key': request.form.get('device_key', '')
+                },
+                form_values
+            )
+            return redirect(url_for('job_page', job_id=job.id))
     except Exception as e:
         session['error'] = f"{str(e)}"
         return redirect(url_for('home'))
 
-def process_matrix_request(train_model, journey_date_str, api_date_format, form_values, auth_token, device_key):
+def process_matrix_request(train_model, journey_date_str, api_date_format, form_values, auth_token, device_key, log=None):
     try:
         if not auth_token or not device_key:
             return {"error": "AUTH_CREDENTIALS_REQUIRED"}
         
-        result = compute_matrix(train_model, journey_date_str, api_date_format, auth_token, device_key)
+        result = compute_matrix(train_model, journey_date_str, api_date_format, auth_token, device_key, log=log)
         if not result or 'stations' not in result:
             return {"error": "No data received. Please try a different train or date."}
         
@@ -516,6 +520,52 @@ def process_matrix_request(train_model, journey_date_str, api_date_format, form_
         if error_msg in ["AUTH_TOKEN_EXPIRED", "AUTH_DEVICE_KEY_EXPIRED"]:
             return {"error": error_msg}
         return {"error": error_msg}
+
+@app.route('/job/<job_id>')
+def job_page(job_id):
+    maintenance_response = check_maintenance()
+    if maintenance_response:
+        return maintenance_response
+    job = job_store.get(job_id)
+    if not job:
+        session['error'] = "Your request has expired or could not be found. Please search again."
+        return redirect(url_for('home'))
+    return render_template('job_logs.html', job_id=job.id, form_values=job.form_values)
+
+@app.route('/job/<job_id>/logs')
+def job_logs(job_id):
+    job = job_store.get(job_id)
+    if not job:
+        return jsonify({"error": "not_found"}), 404
+    try:
+        since = max(0, int(request.args.get('since', 0)))
+    except ValueError:
+        since = 0
+    lines, total = job.logs_since(since)
+    return jsonify({"logs": lines, "next": total, "status": job.status, "error": job.error})
+
+@app.route('/job/<job_id>/result')
+def job_result(job_id):
+    maintenance_response = check_maintenance()
+    if maintenance_response:
+        return maintenance_response
+    job = job_store.get(job_id)
+    if not job or job.status != "completed":
+        session['error'] = "Your request has expired or could not be found. Please search again."
+        return redirect(url_for('home'))
+    return render_template(
+        'matrix.html',
+        **job.result["result"],
+        form_values=job.form_values,
+        styles_css=STYLES_CSS_CONTENT,
+        script_js=SCRIPT_JS_CONTENT
+    )
+
+@app.route('/job/<job_id>/failed')
+def job_failed(job_id):
+    job = job_store.get(job_id)
+    session['error'] = (job.error if job and job.error else "An error occurred while processing your request. Please try again.")
+    return redirect(url_for('home'))
 
 @app.route('/queue_wait')
 def queue_wait():

@@ -67,7 +67,8 @@ def fetch_train_data(model: str, api_date: str) -> dict:
                     raise Exception("Currently we are experiencing high traffic. Please try again after some time.")
             raise
 
-def get_seat_availability(train_model: str, journey_date: str, from_city: str, to_city: str, auth_token: str, device_key: str) -> tuple:
+def get_seat_availability(train_model: str, journey_date: str, from_city: str, to_city: str, auth_token: str, device_key: str, log=None) -> tuple:
+    log = log or logger
     if not logging.getLogger().handlers:
         logging.basicConfig(
             level=logging.INFO,
@@ -102,7 +103,7 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
             if response.status_code == 429:
                 retry_count += 1
                 backoff_s = 2.0 + (retry_count * 1.5) + random.random() * 0.5
-                logger.warning(
+                log.warning(
                     "seat_check rate_limited call_id=%s %s->%s retry_in=%.1fs",
                     call_id,
                     from_city,
@@ -111,9 +112,8 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
                 )
                 if retry_count >= max_retries:
                     elapsed_ms = (time.perf_counter() - start_ts) * 1000
-                    logger.info(
-                        "seat_check result call_id=%s %s -> %s online=%s offline=%s total=%s ms=%.1f",
-                        call_id,
+                    log.info(
+                        "seat_check result %s -> %s online=%s offline=%s total=%s ms=%.1f",
                         from_city,
                         to_city,
                         0,
@@ -171,9 +171,8 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
                     total_offline = sum(v.get("offline", 0) for v in seat_info.values())
                     total = total_online + total_offline
                     elapsed_ms = (time.perf_counter() - start_ts) * 1000
-                    logger.info(
-                        "seat_check result call_id=%s %s -> %s online=%s offline=%s total=%s ms=%.1f",
-                        call_id,
+                    log.info(
+                        "seat_check result %s -> %s online=%s offline=%s total=%s ms=%.1f",
                         from_city,
                         to_city,
                         total_online,
@@ -184,9 +183,8 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
                     return (from_city, to_city, seat_info)
 
             elapsed_ms = (time.perf_counter() - start_ts) * 1000
-            logger.info(
-                "seat_check result call_id=%s %s -> %s online=%s offline=%s total=%s ms=%.1f",
-                call_id,
+            log.info(
+                "seat_check result %s -> %s online=%s offline=%s total=%s ms=%.1f",
                 from_city,
                 to_city,
                 0,
@@ -202,7 +200,7 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
             if status_code == 429:
                 retry_count += 1
                 backoff_s = 2.0 + (retry_count * 1.5) + random.random() * 0.5
-                logger.warning(
+                log.warning(
                     "seat_check rate_limited call_id=%s %s->%s retry_in=%.1fs",
                     call_id,
                     from_city,
@@ -211,9 +209,8 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
                 )
                 if retry_count >= max_retries:
                     elapsed_ms = (time.perf_counter() - start_ts) * 1000
-                    logger.info(
-                        "seat_check result call_id=%s %s -> %s online=%s offline=%s total=%s ms=%.1f",
-                        call_id,
+                    log.info(
+                        "seat_check result %s -> %s online=%s offline=%s total=%s ms=%.1f",
                         from_city,
                         to_city,
                         0,
@@ -243,9 +240,8 @@ def get_seat_availability(train_model: str, journey_date: str, from_city: str, t
                 raise Exception("Currently we are experiencing high traffic. Please try again after some time.")
 
             elapsed_ms = (time.perf_counter() - start_ts) * 1000
-            logger.info(
-                "seat_check result call_id=%s %s -> %s online=%s offline=%s total=%s ms=%.1f",
-                call_id,
+            log.info(
+                "seat_check result %s -> %s online=%s offline=%s total=%s ms=%.1f",
                 from_city,
                 to_city,
                 0,
@@ -301,11 +297,14 @@ def clean_halt_times(routes):
             except Exception:
                 continue
 
-def compute_matrix(train_model: str, journey_date_str: str, api_date_format: str, auth_token: str, device_key: str) -> dict:
+def compute_matrix(train_model: str, journey_date_str: str, api_date_format: str, auth_token: str, device_key: str, log=None) -> dict:
+    log = log or logger
+    log.info("Fetching route information for train %s on %s", train_model, journey_date_str)
     train_data = fetch_train_data(train_model, api_date_format)
     if not train_data or not train_data.get("train_name") or not train_data.get("routes"):
         raise Exception("No information found for this train. Please try another train or date.")
 
+    log.info("Route found: %s (%d stations)", train_data.get("train_name"), len(train_data["routes"]))
     clean_halt_times(train_data['routes'])
 
     stations = [r['city'] for r in train_data['routes']]
@@ -370,6 +369,10 @@ def compute_matrix(train_model: str, journey_date_str: str, api_date_format: str
 
     seat_type_has_data = {seat_type: False for seat_type in SEAT_TYPES}
 
+    total_pairs = len(stations) * (len(stations) - 1) // 2
+    log.info("Checking seat availability for %d station pairs (this can take a while)", total_pairs)
+    done_pairs = 0
+
     with ThreadPoolExecutor(max_workers=1) as executor:
         futures = [
             executor.submit(
@@ -379,7 +382,8 @@ def compute_matrix(train_model: str, journey_date_str: str, api_date_format: str
                 from_city,
                 to_city,
                 auth_token,
-                device_key
+                device_key,
+                log
             )
             for i, from_city in enumerate(stations)
             for j, to_city in enumerate(stations)
@@ -387,6 +391,8 @@ def compute_matrix(train_model: str, journey_date_str: str, api_date_format: str
         ]
         for future in as_completed(futures):
             from_city, to_city, seat_info = future.result()
+            done_pairs += 1
+            log.info("Progress: %d/%d pairs done", done_pairs, total_pairs)
             for seat_type in SEAT_TYPES:
                 fare_matrices[seat_type][from_city][to_city] = (
                     seat_info.get(seat_type, {"online": 0, "offline": 0, "fare": 0})
@@ -397,6 +403,7 @@ def compute_matrix(train_model: str, journey_date_str: str, api_date_format: str
                         if seat_info[seat_type]["online"] + seat_info[seat_type]["offline"] > 0:
                             seat_type_has_data[seat_type] = True
 
+    log.info("All station pairs checked. Building matrix...")
     if not any(seat_type_has_data.values()):
         raise Exception("No seats available for the selected train and date. Please try a different date or train.")
     
